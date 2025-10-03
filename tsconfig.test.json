@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "./build-tests",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2020"
+  },
+  "include": ["tests/**/*.ts", "src/utils/**/*.ts", "src/types.ts"],
+  "exclude": []
+}

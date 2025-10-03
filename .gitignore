@@ -1,0 +1,11 @@
+node_modules
+build
+dist
+build-tests
+.DS_Store
+.vscode
+.idea
+.env
+
+# YoYo AI version control directory
+.yoyo/

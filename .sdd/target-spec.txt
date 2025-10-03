@@ -1,0 +1,2 @@
+auto-span-allocation
+Automatically divide scaffold lines into 1800mm-based spans with colored markers at boundaries.
