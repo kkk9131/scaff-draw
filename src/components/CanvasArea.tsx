@@ -2,14 +2,34 @@ import { FC, RefObject, useEffect, useRef, useState } from 'react';
 import { Stage, Layer, Rect, Line, Text, Group, Circle, Label, Tag } from 'react-konva';
 import 'konva/lib/shapes/Label';
 import type Konva from 'konva';
-import type { Block, LineAppearance, LineDraft, Marker, Note, ScaffoldLine, UIMode } from '../types';
+import type {
+  BandPoint,
+  Block,
+  LineAppearance,
+  LineColor,
+  LineDraft,
+  Marker,
+  Note,
+  ScaffoldLine,
+  UIMode,
+} from '../types';
 import { snapPointToGrid, snapToGrid } from '../utils/snap';
 import { BLOCK_HEIGHT_PX, MM_TO_PIXEL_SCALE } from '../utils/geometry';
+import { DEFAULT_BLOCK_WIDTH } from '../utils/lineWidth.js';
+import { flattenPoints } from '../utils/innerBand.js';
 
 const PRIMARY_GRID_MM = 300;
 const SECONDARY_GRID_MM = 150;
 const SECONDARY_RATIO = Math.max(1, Math.round(PRIMARY_GRID_MM / SECONDARY_GRID_MM));
 const DRAG_THRESHOLD_PX = 4;
+
+const SPAN_FILL_COLORS: Record<LineColor, string> = {
+  black: 'rgba(15, 23, 42, 0.18)',
+  red: 'rgba(220, 38, 38, 0.18)',
+  blue: 'rgba(37, 99, 235, 0.18)',
+  green: 'rgba(22, 163, 74, 0.18)',
+};
+
 
 interface CanvasAreaProps {
   blocks: Block[];
@@ -56,6 +76,7 @@ const CanvasArea: FC<CanvasAreaProps> = ({
   const pointerStateRef = useRef<'idle' | 'potential-drag' | 'dragging'>('idle');
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null);
   const ignoreClickRef = useRef(false);
+  const isLineMode = uiMode === 'draw';
 
   const toSnappedPoint = (stage: Konva.Stage): { x: number; y: number } | null => {
     const pointer = stage.getPointerPosition();
@@ -82,7 +103,7 @@ const CanvasArea: FC<CanvasAreaProps> = ({
 
     onMousePositionChange(snappedPoint.x, snappedPoint.y);
 
-    if (uiMode !== 'draw') {
+    if (!isLineMode) {
       return;
     }
 
@@ -137,7 +158,7 @@ const CanvasArea: FC<CanvasAreaProps> = ({
   };
 
   const handleStageMouseDown = (event: Konva.KonvaEventObject<MouseEvent>) => {
-    if (uiMode !== 'draw') return;
+    if (!isLineMode) return;
     if (event.evt.button !== 0) return;
     const stage = event.target.getStage();
     if (!stage) return;
@@ -150,7 +171,7 @@ const CanvasArea: FC<CanvasAreaProps> = ({
   };
 
   const handleStageMouseUp = (event: Konva.KonvaEventObject<MouseEvent>) => {
-    if (uiMode !== 'draw') return;
+    if (!isLineMode) return;
     const stage = event.target.getStage();
     if (!stage) return;
     const snappedPoint = toSnappedPoint(stage);
@@ -175,16 +196,16 @@ const CanvasArea: FC<CanvasAreaProps> = ({
     const stage = event.target.getStage();
     if (!stage) return;
 
+    if (ignoreClickRef.current) {
+      ignoreClickRef.current = false;
+      return;
+    }
+
     if (event.target === stage) {
       onSelectLine(null);
     }
 
     if (uiMode !== 'draw' || event.evt.button !== 0) {
-      return;
-    }
-
-    if (ignoreClickRef.current) {
-      ignoreClickRef.current = false;
       return;
     }
 
@@ -210,7 +231,7 @@ const CanvasArea: FC<CanvasAreaProps> = ({
   };
 
   const handleStageContextMenu = (event: Konva.KonvaEventObject<MouseEvent>) => {
-    if (uiMode !== 'draw') return;
+    if (!isLineMode) return;
     event.evt.preventDefault();
     pointerStateRef.current = 'idle';
     pointerStartRef.current = null;
@@ -220,7 +241,7 @@ const CanvasArea: FC<CanvasAreaProps> = ({
 
   const handleStageMouseLeave = () => {
     onMousePositionChange(0, 0);
-    if (uiMode === 'draw') {
+    if (isLineMode) {
       pointerStateRef.current = 'idle';
       pointerStartRef.current = null;
       ignoreClickRef.current = false;
@@ -309,6 +330,31 @@ const CanvasArea: FC<CanvasAreaProps> = ({
     return lines;
   };
 
+  const toCanvasPoints = (points: BandPoint[]): number[] =>
+    flattenPoints(points).map((value) => value * MM_TO_PIXEL_SCALE);
+
+  const toCanvasPoint = (point: BandPoint): { x: number; y: number } => ({
+    x: point.x * MM_TO_PIXEL_SCALE,
+    y: point.y * MM_TO_PIXEL_SCALE,
+  });
+
+  const computeCentroid = (points: BandPoint[]): BandPoint => {
+    if (points.length === 0) {
+      return { x: 0, y: 0 };
+    }
+    const sum = points.reduce(
+      (acc, point) => ({
+        x: acc.x + point.x,
+        y: acc.y + point.y,
+      }),
+      { x: 0, y: 0 },
+    );
+    return {
+      x: sum.x / points.length,
+      y: sum.y / points.length,
+    };
+  };
+
   return (
     <div className="canvas-wrapper" ref={canvasRef}>
       <Stage
@@ -324,7 +370,7 @@ const CanvasArea: FC<CanvasAreaProps> = ({
       >
         <Layer>{gridLines()}</Layer>
         <Layer listening={false}>
-          {uiMode === 'draw' && lineDraft && lineDraft.status !== 'idle' ? (
+          {isLineMode && lineDraft && lineDraft.status !== 'idle' ? (
             <Line
               points={[
                 lineDraft.startX * MM_TO_PIXEL_SCALE,
@@ -344,8 +390,51 @@ const CanvasArea: FC<CanvasAreaProps> = ({
         </Layer>
         <Layer>
           {blocks.map((block) => {
+            if (block.autoInnerBand && block.innerBandId) {
+              const sourceLine = lines.find((line) => line.metadata?.innerBand?.id === block.innerBandId);
+              const band = sourceLine?.metadata?.innerBand;
+              if (!sourceLine || !band) {
+                return null;
+              }
+              const polygon = band.spanPolygons.find((item) => item.spanId === block.id);
+              if (!polygon) {
+                return null;
+              }
+              const centroid = computeCentroid(polygon.points);
+              const centroidPx = toCanvasPoint(centroid);
+              const labelX = centroidPx.x - 28;
+              const labelY = centroidPx.y - 10;
+              return (
+                <Group key={block.id} listening={false}>
+                  <Line
+                    points={toCanvasPoints(polygon.points)}
+                    closed
+                    fill={SPAN_FILL_COLORS[sourceLine.color]}
+                    stroke={sourceLine.color}
+                    strokeWidth={2}
+                    lineJoin="round"
+                  />
+                  <Text
+                    text={`${block.length}mm`}
+                    fontSize={12}
+                    fill="#1e293b"
+                    x={labelX}
+                    y={labelY}
+                    width={56}
+                    align="center"
+                    listening={false}
+                  />
+                </Group>
+              );
+            }
             const widthPx = block.length * MM_TO_PIXEL_SCALE;
             const isLocked = Boolean(block.locked);
+            const deckWidthMm = block.sourceLineId
+              ? block.width ?? DEFAULT_BLOCK_WIDTH
+              : undefined;
+            const blockHeightPx = deckWidthMm
+              ? deckWidthMm * MM_TO_PIXEL_SCALE
+              : BLOCK_HEIGHT_PX;
             return (
               <Group
                 key={block.id}
@@ -374,7 +463,7 @@ const CanvasArea: FC<CanvasAreaProps> = ({
               >
                 <Rect
                   width={widthPx}
-                  height={BLOCK_HEIGHT_PX}
+                  height={blockHeightPx}
                   fill={isLocked ? '#e2e8f0' : '#bfdbfe'}
                   stroke={isLocked ? '#94a3b8' : '#1d4ed8'}
                   strokeWidth={2}
@@ -429,10 +518,10 @@ const CanvasArea: FC<CanvasAreaProps> = ({
           {markers.map((marker) => (
             <Group key={marker.id} x={marker.x * MM_TO_PIXEL_SCALE} y={marker.y * MM_TO_PIXEL_SCALE}>
               <Circle
-                radius={marker.generated ? 5 : 10}
+                radius={marker.generated ? (marker.role === 'corner' ? 6 : 5) : 10}
                 fill={marker.color ?? '#f97316'}
                 stroke={marker.generated ? '#1f2937' : undefined}
-                strokeWidth={marker.generated ? 1 : 0}
+                strokeWidth={marker.generated ? (marker.role === 'corner' ? 2 : 1) : 0}
                 hitStrokeWidth={20}
                 onClick={() => {
                   if (marker.blockId) {

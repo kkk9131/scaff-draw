@@ -35,6 +35,7 @@ const horizontalBase: ScaffoldLine = {
   orientation: 'horizontal',
   color: 'black',
   style: 'solid',
+  blockWidth: 600,
 };
 
 run('recalculateLineWithLength extends a horizontal line symmetrically', () => {
@@ -56,6 +57,7 @@ const verticalBase: ScaffoldLine = {
   orientation: 'vertical',
   color: 'black',
   style: 'solid',
+  blockWidth: 600,
 };
 
 run('recalculateLineWithLength shortens a vertical line', () => {

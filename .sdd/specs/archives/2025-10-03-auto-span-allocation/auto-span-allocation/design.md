@@ -133,3 +133,22 @@ interface Block {
 - No backend changes; feature ships with the SPA bundle.
 - Existing saved JSON files remain valid; new metadata is additive and optional.
 - Document the new export shape in `docs/scaffdraw-design.md` for downstream tooling alignment.
+
+## Outcome & Metrics
+- 実装結果: 自動割付ユーティリティ (`spanPlanner.ts`, `lineProjection.ts`, `lineAllocation.ts`) と UI 連携を完成させ、要件で求めたデータ構造・視覚表示を満たした。
+- 要件適合: 主要 7 件を満たし、性能測定のみ今後のフォロー。
+- テスト証跡: `npm run test` (ユニット/統合テスト)・`npm run lint` を実行し、手動で割付 UI 動作を確認。
+- ロールアウト: ローカル SPA のみでリリース可、追加のデプロイ手順不要。
+
+## Retrospective
+### 良かったこと
+- 設計通りユーティリティ層を切り出したことで UI からの再利用・テストが容易になった。
+- Konva レイヤ調整と BlockList のロック表示により、利用者が自動スパンを直感的に把握できるようになった。
+
+### 課題
+- 寸法ポップアップのフォーカス喪失で線選択が外れる問題は実装後に気づき修正した。UI 仕様の事前確認をより厳密にする余地がある。
+- パフォーマンス計測や Undo/Redo 要件は未着手で、今後の作業として残る。
+
+### 次に活かすこと
+- モーダルやフォーカスを伴う操作では、早期にアクセシビリティ/選択状態のテストケースを追加する。
+- Undo/Redo など周辺仕様はリファレンス実装前に別途ユーザーストーリー化しておく。

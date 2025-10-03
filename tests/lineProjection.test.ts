@@ -29,6 +29,7 @@ const horizontalLine: ScaffoldLine = {
   orientation: 'horizontal',
   color: 'black',
   style: 'solid',
+  blockWidth: 600,
 };
 
 run('projectSegmentsOntoLine maps horizontal segments correctly', () => {
@@ -49,6 +50,7 @@ const verticalLine: ScaffoldLine = {
   orientation: 'vertical',
   color: 'blue',
   style: 'solid',
+  blockWidth: 600,
 };
 
 run('projectSegmentsOntoLine maps vertical segments correctly', () => {
@@ -69,6 +71,7 @@ const diagonalLine: ScaffoldLine = {
   orientation: 'diagonal',
   color: 'red',
   style: 'solid',
+  blockWidth: 600,
 };
 
 run('projectSegmentsOntoLine handles diagonal spans', () => {

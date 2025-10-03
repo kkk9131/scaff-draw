@@ -7,7 +7,20 @@ import ToolPalette from './components/ToolPalette';
 import CanvasArea from './components/CanvasArea';
 import BlockListPanel from './components/BlockListPanel';
 import StatusBar from './components/StatusBar';
-import type { Block, LineAppearance, LineDraft, Marker, Note, ScaffoldLine, UIMode } from './types';
+import type {
+  BandPoint,
+  Block,
+  BlockWidth,
+  InnerBandOrientationChoice,
+  InnerBandSettings,
+  LineAppearance,
+  LineDraft,
+  LineInnerBand,
+  Marker,
+  Note,
+  ScaffoldLine,
+  UIMode,
+} from './types';
 import { DEFAULT_SNAP_SIZE, SECONDARY_SNAP_SIZE, snapPointToGrid, snapToGrid } from './utils/snap';
 import type { Point } from './utils/snap';
 import { calculateLineLength, inferOrientation, recalculateLineWithLength } from './utils/lineGeometry';
@@ -15,6 +28,14 @@ import { validateLineLengthValue } from './utils/validation';
 import { generateLineId } from './utils/lineId';
 import { normalizeScaffoldLine } from './utils/lineNormalize';
 import { allocateLineResources } from './utils/lineAllocation.js';
+import type { AllocationFailureReason } from './utils/lineAllocation.js';
+import {
+  DEFAULT_BLOCK_WIDTH,
+  SUPPORTED_BLOCK_WIDTHS,
+  canApplyWidthToLine,
+  getMinimumLengthForWidth,
+} from './utils/lineWidth.js';
+import { buildInnerBandGeometry, computeInwardNormal } from './utils/innerBand.js';
 import LineLengthPopup from './components/LineLengthPopup';
 import './App.css';
 
@@ -30,18 +51,11 @@ const repositionBlocks = (list: Block[]): Block[] => {
   });
 };
 
-const initialBlocks: Block[] = repositionBlocks([
-  { id: 'b1', length: 1800, type: 'span', x: 0, y: 0 },
-  { id: 'b2', length: 1800, type: 'span', x: 0, y: 0 },
-  { id: 'b3', length: 1200, type: 'span', x: 0, y: 0 },
-]);
+const initialBlocks: Block[] = [];
 
-const initialMarkers: Marker[] = [
-  { id: 'm1', blockId: 'b1', x: 1800, y: 0, note: '支柱2本' },
-  { id: 'm2', blockId: 'b2', x: 3600, y: 0, note: '支柱1本+ブラケット' },
-];
+const initialMarkers: Marker[] = [];
 
-const initialNotes: Note[] = [{ id: 'n1', text: 'ここに階段', x: 3600, y: -120 }];
+const initialNotes: Note[] = [];
 
 const createLine = (
   id: string,
@@ -51,6 +65,7 @@ const createLine = (
   endY: number,
   metadata?: ScaffoldLine['metadata'],
   appearance: LineAppearance = { color: 'black', style: 'solid' },
+  blockWidth: BlockWidth = DEFAULT_BLOCK_WIDTH,
 ): ScaffoldLine => ({
   id,
   startX,
@@ -61,18 +76,249 @@ const createLine = (
   orientation: inferOrientation({ startX, startY, endX, endY }),
   color: appearance.color,
   style: appearance.style,
+  blockWidth,
   metadata,
 });
 
-const initialLines: ScaffoldLine[] = [
-  createLine('line-b1', 0, 0, 1800, 0, { blockId: 'b1' }),
-  createLine('line-b2', 1800, 0, 3600, 0, { blockId: 'b2' }),
-  createLine('line-b3', 0, 600, 1200, 600, { blockId: 'b3' }),
-];
+const initialLines: ScaffoldLine[] = [];
 
 const cloneInitialLines = () => initialLines.map((line) => normalizeScaffoldLine({ ...line }));
 
 const defaultLineAppearance: LineAppearance = { color: 'black', style: 'solid' };
+
+const AUTO_BAND_WARNING_MESSAGE = '線が短すぎるため内側ブロック帯を生成できません (最小 150mm)。';
+
+const createInnerBandId = (lineId: string) => `${lineId}-inner-band`;
+
+const ORIENTATION_VECTORS: Record<'up' | 'down' | 'left' | 'right', { x: number; y: number }> = {
+  up: { x: 0, y: -1 },
+  down: { x: 0, y: 1 },
+  left: { x: -1, y: 0 },
+  right: { x: 1, y: 0 },
+};
+
+const ORIENTATION_SUCCESS_MESSAGE: Record<InnerBandOrientationChoice, (lineId: string) => string> = {
+  up: (lineId) => `線 ${lineId} のブロック帯を上側に設定しました。`,
+  down: (lineId) => `線 ${lineId} のブロック帯を下側に設定しました。`,
+  left: (lineId) => `線 ${lineId} のブロック帯を左側に設定しました。`,
+  right: (lineId) => `線 ${lineId} のブロック帯を右側に設定しました。`,
+  standard: (lineId) => `線 ${lineId} のブロック帯を描画方向基準の側に設定しました。`,
+  reverse: (lineId) => `線 ${lineId} のブロック帯を描画方向の反対側に設定しました。`,
+};
+
+const computeAbsoluteOffset = (
+  line: ScaffoldLine,
+  width: BlockWidth,
+  settings?: InnerBandSettings,
+): { offset: BandPoint; polarity: 1 | -1; orientation?: InnerBandOrientationChoice } => {
+  const baseNormal = computeInwardNormal(line);
+  const orientationChoice = settings?.orientation;
+
+  const orientationVector = (choice: InnerBandOrientationChoice): BandPoint => {
+    switch (choice) {
+      case 'up':
+        return { x: 0, y: -width };
+      case 'down':
+        return { x: 0, y: width };
+      case 'left':
+        return { x: -width, y: 0 };
+      case 'right':
+        return { x: width, y: 0 };
+      case 'reverse':
+        return { x: -baseNormal.x * width, y: -baseNormal.y * width };
+      case 'standard':
+      default:
+        return { x: baseNormal.x * width, y: baseNormal.y * width };
+    }
+  };
+
+  let offset: BandPoint;
+  let orientation: InnerBandOrientationChoice | undefined = orientationChoice;
+
+  if (orientationChoice) {
+    offset = orientationVector(orientationChoice);
+  } else if (settings?.polarity) {
+    offset = {
+      x: baseNormal.x * width * settings.polarity,
+      y: baseNormal.y * width * settings.polarity,
+    };
+  } else {
+    offset = {
+      x: baseNormal.x * width,
+      y: baseNormal.y * width,
+    };
+  }
+
+  const baseDot = baseNormal.x * offset.x + baseNormal.y * offset.y;
+  const polarity = baseDot >= 0 ? 1 : -1;
+
+  // Normalize offsets to exact width magnitude for stability
+  const magnitude = Math.hypot(offset.x, offset.y) || 1;
+  const normalizedOffset = {
+    x: (offset.x / magnitude) * width,
+    y: (offset.y / magnitude) * width,
+  };
+
+  if (!orientation && polarity === -1) {
+    orientation = 'reverse';
+  }
+
+  return { offset: normalizedOffset, polarity, orientation };
+};
+
+const sanitizeLineMetadata = (line: ScaffoldLine): ScaffoldLine => {
+  if (!line.metadata) {
+    return { ...line, metadata: undefined };
+  }
+  const { metadata } = line;
+  const { blockId, innerBandSettings } = metadata;
+  const nextMetadata: ScaffoldLine['metadata'] | undefined = blockId || innerBandSettings
+    ? {
+        ...(blockId ? { blockId } : {}),
+        ...(innerBandSettings ? { innerBandSettings } : {}),
+      }
+    : undefined;
+  return {
+    ...line,
+    metadata: nextMetadata,
+  };
+};
+
+type InnerBandGenerationResult =
+  | {
+      success: true;
+      line: ScaffoldLine;
+      markers: Marker[];
+      blocks: Block[];
+      summary: string;
+    }
+  | {
+      success: false;
+      line: ScaffoldLine;
+      reason: AllocationFailureReason;
+    };
+
+const dedupeMarkersByPosition = (markers: Marker[]): Marker[] => {
+  const seen = new Set<string>();
+  const rounded = (value: number) => Math.round(value * 1000) / 1000;
+  const result: Marker[] = [];
+  markers.forEach((marker) => {
+    const key = `${rounded(marker.x)}:${rounded(marker.y)}:${marker.role ?? 'unknown'}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(marker);
+    }
+  });
+  return result;
+};
+
+const generateInnerBandForLine = (line: ScaffoldLine): InnerBandGenerationResult => {
+  const effectiveWidth = line.blockWidth ?? DEFAULT_BLOCK_WIDTH;
+  const normalizedLine: ScaffoldLine = { ...line, blockWidth: effectiveWidth };
+  const existingSettings = normalizedLine.metadata?.innerBandSettings;
+  const { offset, polarity, orientation } = computeAbsoluteOffset(
+    normalizedLine,
+    effectiveWidth,
+    existingSettings,
+  );
+  const allocation = allocateLineResources(normalizedLine);
+
+  if (!allocation.success) {
+    return {
+      success: false,
+      line: sanitizeLineMetadata(normalizedLine),
+      reason: allocation.reason,
+    };
+  }
+
+  const geometry = buildInnerBandGeometry(
+    normalizedLine,
+    allocation.spans,
+    effectiveWidth,
+    polarity,
+    offset,
+  );
+  const bandId = createInnerBandId(normalizedLine.id);
+  const generatedAt = Date.now();
+
+  const innerBand: LineInnerBand = {
+    id: bandId,
+    auto: true,
+    width: effectiveWidth,
+    generatedAt,
+    outer: geometry.outer,
+    inner: geometry.inner,
+    outline: geometry.outline,
+    spanPolygons: geometry.spanPolygons,
+    summary: allocation.summary,
+    polarity,
+    orientation,
+  };
+
+  const metadata: ScaffoldLine['metadata'] = {
+    ...(normalizedLine.metadata?.blockId ? { blockId: normalizedLine.metadata.blockId } : {}),
+    innerBandSettings: {
+      polarity,
+      ...(orientation ? { orientation } : {}),
+    },
+    spans: allocation.spans,
+    spanChecksum: allocation.checksum,
+    innerBand,
+  };
+
+  const enrichedLine: ScaffoldLine = {
+    ...normalizedLine,
+    length: allocation.measuredLength,
+    metadata,
+  };
+
+  const boundaryMarkers = allocation.markers.map((marker) => ({
+    ...marker,
+    generated: true,
+    lineId: normalizedLine.id,
+    color: normalizedLine.color,
+    role: 'boundary' as const,
+  }));
+
+  const cornerMarkers: Marker[] = dedupeMarkersByPosition([
+    {
+      id: `${normalizedLine.id}-corner-start`,
+      blockId: null,
+      x: normalizedLine.startX,
+      y: normalizedLine.startY,
+      lineId: normalizedLine.id,
+      color: normalizedLine.color,
+      generated: true,
+      role: 'corner',
+    },
+    {
+      id: `${normalizedLine.id}-corner-end`,
+      blockId: null,
+      x: normalizedLine.endX,
+      y: normalizedLine.endY,
+      lineId: normalizedLine.id,
+      color: normalizedLine.color,
+      generated: true,
+      role: 'corner',
+    },
+  ]);
+
+  const markers = dedupeMarkersByPosition([...boundaryMarkers, ...cornerMarkers]);
+
+  const blocks = allocation.blocks.map((block) => ({
+    ...block,
+    autoInnerBand: true,
+    innerBandId: bandId,
+  }));
+
+  return {
+    success: true,
+    line: enrichedLine,
+    markers,
+    blocks,
+    summary: allocation.summary,
+  };
+};
 
 const formatTimestamp = () => {
   const now = new Date();
@@ -89,6 +335,7 @@ const App = () => {
   const [lines, setLines] = useState<ScaffoldLine[]>(cloneInitialLines);
   const [lineDraft, setLineDraft] = useState<LineDraft | null>(null);
   const [lineAppearance, setLineAppearance] = useState<LineAppearance>({ ...defaultLineAppearance });
+  const [defaultBlockWidth, setDefaultBlockWidth] = useState<BlockWidth>(DEFAULT_BLOCK_WIDTH);
   const [lineDrawingWarning, setLineDrawingWarning] = useState<string | null>(null);
   const [liveMessage, setLiveMessage] = useState('');
   const [uiMode, setUIMode] = useState<UIMode>('draw');
@@ -183,56 +430,53 @@ const App = () => {
   };
 
   const handleAllocate = () => {
-    if (!activeLineId) {
-      setLineDrawingWarning('割付する線を選択してください。');
+    if (lines.length === 0) {
+      const message = '割付できる線がキャンバスにありません。';
+      setLineDrawingWarning(message);
+      setLiveMessage(message);
       return;
     }
 
-    const targetLine = lines.find((line) => line.id === activeLineId);
-    if (!targetLine) {
-      setLineDrawingWarning('選択した線が見つかりませんでした。');
-      return;
-    }
+    const snapshot = [...lines];
+    const successSummaries: string[] = [];
+    const failures: { lineId: string; reason: AllocationFailureReason }[] = [];
 
-    const allocation = allocateLineResources(targetLine);
-
-    if (!allocation.success) {
-      if (allocation.reason === 'INSUFFICIENT_LENGTH') {
-        setLineDrawingWarning('線が短すぎるため割付できません (最小 150mm)。');
+    snapshot.forEach((line) => {
+      const result = applyInnerBandUpdate(line, {
+        announce: false,
+        suppressWarningState: true,
+      });
+      if (result.success) {
+        successSummaries.push(`${line.id}: ${result.summary}`);
       } else {
-        setLineDrawingWarning('割付結果の投影に失敗しました。');
+        failures.push({ lineId: line.id, reason: result.reason });
       }
-      return;
+    });
+
+    if (failures.length > 0) {
+      const insufficient = failures
+        .filter((item) => item.reason === 'INSUFFICIENT_LENGTH')
+        .map((item) => item.lineId);
+      const projection = failures
+        .filter((item) => item.reason === 'PROJECTION_FAILED')
+        .map((item) => item.lineId);
+
+      const issues: string[] = [];
+      if (insufficient.length > 0) {
+        issues.push(`長さ不足: ${insufficient.join(', ')}`);
+      }
+      if (projection.length > 0) {
+        issues.push(`投影失敗: ${projection.join(', ')}`);
+      }
+
+      const warning = `割付できない線があります (${issues.join(' / ')})`;
+      setLineDrawingWarning(warning);
+      setLiveMessage(warning);
+    } else {
+      setLineDrawingWarning(null);
+      const summary = successSummaries.length > 0 ? successSummaries.join(' / ') : '更新対象なし';
+      setLiveMessage(`全線を割付しました: ${summary}`);
     }
-
-    setLines((prev) =>
-      prev.map((line) =>
-        line.id === targetLine.id
-          ? {
-              ...line,
-              length: allocation.measuredLength,
-              metadata: {
-                ...line.metadata,
-                spans: allocation.spans,
-                spanChecksum: allocation.checksum,
-              },
-            }
-          : line,
-      ),
-    );
-
-    setMarkers((prev) => {
-      const preserved = prev.filter((marker) => !(marker.generated && marker.lineId === targetLine.id));
-      return [...preserved, ...allocation.markers];
-    });
-
-    setBlocks((prev) => {
-      const preserved = prev.filter((block) => block.sourceLineId !== targetLine.id);
-      return [...preserved, ...allocation.blocks];
-    });
-
-    setLineDrawingWarning(null);
-    setLiveMessage(`割付完了: ${allocation.summary}`);
   };
 
   const toggleSnapSize = () => {
@@ -275,7 +519,8 @@ const App = () => {
   const handleSelectBlock = (blockId: string) => {
     setSelectedBlockId(blockId);
     handleModeChange('edit');
-    setActiveLineId(null);
+    const targetBlock = blocks.find((block) => block.id === blockId) ?? null;
+    setActiveLineId(targetBlock?.sourceLineId ?? null);
     setLineEditError(null);
   };
 
@@ -360,18 +605,124 @@ const App = () => {
   };
 
   const handleLineLengthChange = (lineId: string, nextLengthMm: number): boolean => {
+    const targetLine = lines.find((line) => line.id === lineId);
+    if (!targetLine) {
+      setLineEditError('指定した線が見つかりません。');
+      return false;
+    }
+
+    let recalculated: ScaffoldLine;
     try {
-      setLines((prev) =>
-        prev.map((line) => (line.id === lineId ? recalculateLineWithLength(line, nextLengthMm, snapSize) : line)),
-      );
-      setActiveLineId(null);
-      setLineEditError(null);
-      return true;
+      recalculated = recalculateLineWithLength(targetLine, nextLengthMm, snapSize);
     } catch (error) {
       const message = error instanceof Error ? error.message : '寸法の更新に失敗しました。';
       setLineEditError(message);
       return false;
     }
+
+    const result = applyInnerBandUpdate(recalculated, { announce: false });
+    setActiveLineId(null);
+
+    if (result.success) {
+      setLineEditError(null);
+      setLiveMessage(
+        `線 ${lineId} の長さを ${Math.round(result.line.length)}mm に更新しました: ${result.summary}`,
+      );
+    } else {
+      const message =
+        result.reason === 'INSUFFICIENT_LENGTH'
+          ? AUTO_BAND_WARNING_MESSAGE
+          : '割付結果の投影に失敗しました。';
+      setLineEditError(message);
+      setLiveMessage(message);
+    }
+
+    return true;
+  };
+
+  const handleLineWidthChange = (lineId: string, nextWidth: BlockWidth): boolean => {
+    const targetLine = lines.find((line) => line.id === lineId);
+    if (!targetLine) {
+      return false;
+    }
+
+    if (!canApplyWidthToLine(targetLine, nextWidth)) {
+      const minimum = getMinimumLengthForWidth(nextWidth);
+      const message = `線 ${lineId} は ${nextWidth}mm 幅に必要な ${minimum}mm を満たしていません。幅は変更されません。`;
+      setLineEditError(message);
+      setLiveMessage(message);
+      return false;
+    }
+
+    const result = applyInnerBandUpdate({ ...targetLine, blockWidth: nextWidth }, { announce: false });
+
+    if (result.success) {
+      setLineEditError(null);
+      setLiveMessage(`線 ${lineId} のデッキ幅を ${nextWidth}mm に設定しました。`);
+      return true;
+    }
+
+    const message =
+      result.reason === 'INSUFFICIENT_LENGTH'
+        ? AUTO_BAND_WARNING_MESSAGE
+        : '割付結果の投影に失敗しました。';
+    setLineEditError(message);
+    setLiveMessage(message);
+    return false;
+  };
+
+  const handleInnerBandOrientationChange = (
+    lineId: string,
+    orientation: InnerBandOrientationChoice,
+  ): boolean => {
+    const targetLine = lines.find((line) => line.id === lineId);
+    if (!targetLine) {
+      setLineEditError('指定した線が見つかりません。');
+      return false;
+    }
+
+    const currentOrientation = targetLine.metadata?.innerBandSettings?.orientation;
+    const currentPolarity = targetLine.metadata?.innerBandSettings?.polarity ?? 1;
+    const baseSettings: InnerBandSettings = { orientation, polarity: currentPolarity };
+    const { polarity: desiredPolarity } = computeAbsoluteOffset(
+      targetLine,
+      targetLine.blockWidth ?? DEFAULT_BLOCK_WIDTH,
+      baseSettings,
+    );
+    const successMessage = ORIENTATION_SUCCESS_MESSAGE[orientation](lineId);
+
+    if (currentPolarity === desiredPolarity && currentOrientation === orientation) {
+      setLineEditError(null);
+      setLineDrawingWarning(null);
+      setLiveMessage(successMessage);
+      return true;
+    }
+
+    const metadata: ScaffoldLine['metadata'] | undefined = {
+      ...(targetLine.metadata?.blockId ? { blockId: targetLine.metadata.blockId } : {}),
+      innerBandSettings: { polarity: desiredPolarity, orientation },
+    };
+
+    const result = applyInnerBandUpdate(
+      {
+        ...targetLine,
+        metadata,
+      },
+      { announce: true, successMessage },
+    );
+
+    if (result.success) {
+      setLineEditError(null);
+      return true;
+    }
+
+    const message =
+      result.reason === 'INSUFFICIENT_LENGTH'
+        ? AUTO_BAND_WARNING_MESSAGE
+        : '割付結果の投影に失敗しました。';
+    setLineEditError(message);
+    setLiveMessage(message);
+    return false;
   };
 
   const handleLineEditCancel = () => {
@@ -403,6 +754,67 @@ const App = () => {
     setLiveMessage('ライン作成をキャンセルしました。');
   }, [resetLineDraft]);
 
+const applyInnerBandUpdate = useCallback(
+  (
+    line: ScaffoldLine,
+    options: {
+      mode?: 'replace' | 'append';
+      announce?: boolean;
+      successMessage?: string;
+      failureMessage?: string;
+      suppressWarningState?: boolean;
+    } = {},
+  ): InnerBandGenerationResult => {
+    const {
+      mode = 'replace',
+      announce = true,
+      successMessage,
+      failureMessage,
+      suppressWarningState = false,
+    } = options;
+      const result = generateInnerBandForLine(line);
+      const updateLines = (nextLine: ScaffoldLine) => {
+        if (mode === 'append') {
+          setLines((prev) => [...prev, nextLine]);
+      } else {
+        setLines((prev) => prev.map((item) => (item.id === nextLine.id ? nextLine : item)));
+      }
+    };
+
+    if (result.success) {
+      updateLines(result.line);
+      setMarkers((prev) => {
+        const preserved = prev.filter((marker) => !(marker.generated && marker.lineId === result.line.id));
+        return [...preserved, ...result.markers];
+      });
+      setBlocks((prev) => {
+        const preserved = prev.filter((block) => block.sourceLineId !== result.line.id);
+        return [...preserved, ...result.blocks];
+      });
+      if (!suppressWarningState) {
+        setLineDrawingWarning(null);
+      }
+      if (announce) {
+        setLiveMessage(successMessage ?? `内側ブロック帯を更新: ${result.summary}`);
+      }
+    } else {
+      updateLines(result.line);
+      setMarkers((prev) => prev.filter((marker) => !(marker.generated && marker.lineId === result.line.id)));
+      setBlocks((prev) => prev.filter((block) => block.sourceLineId !== result.line.id));
+      const warningMessage = failureMessage ?? AUTO_BAND_WARNING_MESSAGE;
+      if (!suppressWarningState) {
+        setLineDrawingWarning(warningMessage);
+      }
+      if (announce) {
+        setLiveMessage(warningMessage);
+      }
+    }
+
+    return result;
+  },
+  [setLines, setMarkers, setBlocks, setLineDrawingWarning, setLiveMessage],
+);
+
   const handleDraftCommit = useCallback(
     (endPoint: Point) => {
       if (!lineDraft) {
@@ -410,58 +822,73 @@ const App = () => {
       }
 
       const startPoint = snapPointToGrid({ x: lineDraft.startX, y: lineDraft.startY }, snapSize);
-    const endPointSnapped = snapPointToGrid(endPoint, snapSize);
+      const endPointSnapped = snapPointToGrid(endPoint, snapSize);
 
-    const nextLength = Math.round(
-      calculateLineLength(startPoint.x, startPoint.y, endPointSnapped.x, endPointSnapped.y),
-    );
-    const validationError = validateLineLengthValue(String(nextLength), snapSize);
+      const nextLength = Math.round(
+        calculateLineLength(startPoint.x, startPoint.y, endPointSnapped.x, endPointSnapped.y),
+      );
+      const validationError = validateLineLengthValue(String(nextLength), snapSize);
 
-    if (validationError) {
-      setLineDrawingWarning(validationError);
-      setLineDraft({
+      if (validationError) {
+        setLineDrawingWarning(validationError);
+        setLineDraft({
+          startX: startPoint.x,
+          startY: startPoint.y,
+          currentX: endPointSnapped.x,
+          currentY: endPointSnapped.y,
+          status: 'awaiting-second-click',
+        });
+        setLiveMessage(validationError);
+        return;
+      }
+
+      const newLineId = generateLineId();
+      const orientation = inferOrientation({
         startX: startPoint.x,
         startY: startPoint.y,
-        currentX: endPointSnapped.x,
-        currentY: endPointSnapped.y,
-        status: 'awaiting-second-click',
+        endX: endPointSnapped.x,
+        endY: endPointSnapped.y,
       });
-      setLiveMessage(validationError);
-      return;
-    }
 
-    const newLineId = generateLineId();
-    const orientation = inferOrientation({
-      startX: startPoint.x,
-      startY: startPoint.y,
-      endX: endPointSnapped.x,
-      endY: endPointSnapped.y,
-    });
+      const newLine: ScaffoldLine = {
+        id: newLineId,
+        startX: startPoint.x,
+        startY: startPoint.y,
+        endX: endPointSnapped.x,
+        endY: endPointSnapped.y,
+        length: nextLength,
+        orientation,
+        color: lineAppearance.color,
+        style: lineAppearance.style,
+        blockWidth: defaultBlockWidth,
+      };
 
-    const newLine: ScaffoldLine = {
-      id: newLineId,
-      startX: startPoint.x,
-      startY: startPoint.y,
-      endX: endPointSnapped.x,
-      endY: endPointSnapped.y,
-      length: nextLength,
-      orientation,
-      color: lineAppearance.color,
-      style: lineAppearance.style,
-    };
-
-      setLines((prev) => [...prev, newLine]);
+      const bandResult = applyInnerBandUpdate(newLine, {
+        mode: 'append',
+        announce: false,
+      });
       setLineDraft(null);
-      setLineDrawingWarning(null);
-      setActiveLineId(newLineId);
+      const committedLine = bandResult.line;
+      setActiveLineId(committedLine.id);
       setSelectedBlockId(null);
-      setLiveMessage(`ラインを追加しました (${nextLength}mm)。`);
+      if (bandResult.success) {
+        setLiveMessage(
+          `ラインと内側ブロック帯を追加しました (${Math.round(committedLine.length)}mm): ${bandResult.summary}`,
+        );
+      } else {
+        setLiveMessage('ラインを追加しましたが、内側ブロック帯は生成できませんでした。');
+      }
     },
-    [lineDraft, lineAppearance, snapSize],
+    [lineDraft, lineAppearance, snapSize, defaultBlockWidth, applyInnerBandUpdate],
   );
 
   const handleAppearanceChange = (next: LineAppearance) => {
     setLineAppearance({ ...next });
+  };
+
+  const handleDefaultBlockWidthChange = (width: BlockWidth) => {
+    setDefaultBlockWidth(width);
+    setLiveMessage(`新しい線のデッキ幅を ${width}mm に設定しました。`);
   };
 
   useEffect(() => {
@@ -503,8 +930,10 @@ const App = () => {
           onToggleSnap={toggleSnapSize}
           lineAppearance={lineAppearance}
           onAppearanceChange={handleAppearanceChange}
-          canAllocate={Boolean(activeLineId)}
-          allocateHint="キャンバスで割付対象の線を選択してください"
+          canAllocate={lines.length > 0}
+          allocateHint="キャンバス上の全ての線に割付を適用します"
+          selectedBlockWidth={defaultBlockWidth}
+          onBlockWidthChange={handleDefaultBlockWidthChange}
         />
         <main
           className="workspace"
@@ -533,18 +962,21 @@ const App = () => {
             onDraftCancel={handleDraftCancel}
           />
           {activeLine ? (
-            <LineLengthPopup
-              key={activeLine.id}
-              stageRef={stageRef}
-              containerRef={canvasRef}
-              line={activeLine}
-              snapSize={snapSize}
-              isOpen={Boolean(activeLine)}
-              errorMessage={lineEditError}
-              onSubmit={(value) => handleLineLengthChange(activeLine.id, value)}
-              onCancel={handleLineEditCancel}
-              onDirty={() => setLineEditError(null)}
-            />
+          <LineLengthPopup
+            key={activeLine.id}
+            stageRef={stageRef}
+            containerRef={canvasRef}
+            line={activeLine}
+            snapSize={snapSize}
+            isOpen={Boolean(activeLine)}
+            errorMessage={lineEditError}
+            onSubmit={(value) => handleLineLengthChange(activeLine.id, value)}
+            onCancel={handleLineEditCancel}
+            onDirty={() => setLineEditError(null)}
+            availableWidths={SUPPORTED_BLOCK_WIDTHS}
+            onWidthChange={(value) => handleLineWidthChange(activeLine.id, value)}
+            onOrientationChange={(choice) => handleInnerBandOrientationChange(activeLine.id, choice)}
+          />
           ) : null}
         </main>
         <BlockListPanel

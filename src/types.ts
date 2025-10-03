@@ -1,5 +1,7 @@
 export type BlockType = 'span' | 'stair' | 'beam-frame' | 'note';
 
+export type BlockWidth = 600 | 355;
+
 export interface Block {
   id: string;
   length: number; // mm
@@ -8,6 +10,9 @@ export interface Block {
   y: number; // mm-based layout coordinate
   sourceLineId?: string;
   locked?: boolean;
+  width?: BlockWidth;
+  autoInnerBand?: boolean;
+  innerBandId?: string;
 }
 
 export interface LineSpan {
@@ -29,6 +34,7 @@ export interface Marker {
   lineId?: string;
   color?: LineColor;
   generated?: boolean;
+  role?: 'boundary' | 'corner';
 }
 
 export interface Note {
@@ -56,10 +62,13 @@ export interface ScaffoldLine {
   orientation: LineOrientation;
   color: LineColor;
   style: LineStyle;
+  blockWidth: BlockWidth;
   metadata?: {
     blockId?: string;
     spans?: LineSpan[];
     spanChecksum?: string;
+    innerBandSettings?: InnerBandSettings;
+    innerBand?: LineInnerBand;
   };
 }
 
@@ -76,4 +85,35 @@ export interface LineDraft {
 export interface LineAppearance {
   color: LineColor;
   style: LineStyle;
+}
+
+export interface BandPoint {
+  x: number;
+  y: number;
+}
+
+export interface InnerBandSpanPolygon {
+  spanId: string;
+  points: BandPoint[];
+}
+
+export type InnerBandOrientationChoice = 'up' | 'down' | 'left' | 'right' | 'standard' | 'reverse';
+
+export interface InnerBandSettings {
+  polarity: 1 | -1;
+  orientation?: InnerBandOrientationChoice;
+}
+
+export interface LineInnerBand {
+  id: string;
+  auto: boolean;
+  width: BlockWidth;
+  generatedAt: number;
+  outer: BandPoint[];
+  inner: BandPoint[];
+  outline: BandPoint[];
+  spanPolygons: InnerBandSpanPolygon[];
+  summary: string;
+  polarity: 1 | -1;
+  orientation?: InnerBandOrientationChoice;
 }

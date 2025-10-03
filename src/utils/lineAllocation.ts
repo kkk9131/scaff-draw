@@ -2,6 +2,7 @@ import type { Block, LineSpan, Marker, ScaffoldLine } from '../types.js';
 import { calculateLineLength } from './lineGeometry.js';
 import { planSpans, getSpanSummary } from './spanPlanner.js';
 import { projectSegmentsOntoLine } from './lineProjection.js';
+import { DEFAULT_BLOCK_WIDTH } from './lineWidth.js';
 
 export type AllocationFailureReason = 'INSUFFICIENT_LENGTH' | 'PROJECTION_FAILED';
 
@@ -36,6 +37,8 @@ export const allocateLineResources = (line: ScaffoldLine): AllocationResult => {
   const measuredLength = Math.round(
     calculateLineLength(line.startX, line.startY, line.endX, line.endY) * 1000,
   ) / 1000;
+
+  const blockWidth = line.blockWidth ?? DEFAULT_BLOCK_WIDTH;
 
   const planResult = planSpans(measuredLength);
   if (!planResult.success) {
@@ -84,6 +87,7 @@ export const allocateLineResources = (line: ScaffoldLine): AllocationResult => {
     y: span.start.y,
     sourceLineId: line.id,
     locked: true,
+    width: blockWidth,
   }));
 
   return {

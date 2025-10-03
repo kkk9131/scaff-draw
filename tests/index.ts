@@ -6,5 +6,6 @@ import './line-normalize.test.js';
 import './spanPlanner.test.js';
 import './lineProjection.test.js';
 import './allocateLineSpans.test.js';
+import './innerBandGeneration.test.js';
 
 console.log('All tests executed.');

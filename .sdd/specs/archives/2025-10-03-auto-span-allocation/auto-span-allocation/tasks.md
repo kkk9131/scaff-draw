@@ -9,6 +9,14 @@
 | 5 | UI enablement & rendering | Reflect allocation in UI, enforce selection requirements, render markers | `src/components/ToolPalette.tsx`, `CanvasArea.tsx`, `BlockListPanel.tsx`, `StatusBar.tsx`, styles if needed | "割付" button disabled until a line is selected with tooltip/hint; markers draw with new color props and ignore duplicates; BlockList shows generated spans as read-only; StatusBar announces summary | TBD | Depends on Task 4 (state shape) |
 | 6 | Tests & documentation pass | Exercise controller and UI via component tests; update export docs | `tests/allocateLineSpans.test.tsx`, `docs/scaffdraw-design.md`, regression checklist | React Testing Library test covers happy path & underflow warning; docs describe `metadata.spans`; manual export smoke checklist executed and logged | TBD | Final task; requires Tasks 2–5 |
 
+## Completion Status
+- [x] Task 1: Domain type extensions
+- [x] Task 2: Span planning utility
+- [x] Task 3: Line projection helper
+- [x] Task 4: Allocation controller integration
+- [x] Task 5: UI enablement & rendering
+- [x] Task 6: Tests & documentation pass
+
 ## Notes & Sequencing
 - Tasks 2 and 3 can proceed in parallel once Task 1 lands.
 - Task 4 is the integration hinge; schedule extra review time.

@@ -29,6 +29,7 @@ const baseLine: ScaffoldLine = {
   orientation: 'horizontal',
   color: 'red',
   style: 'solid',
+  blockWidth: 600,
 };
 
 run('allocateLineResources returns spans/markers/blocks for a horizontal line', () => {
@@ -42,6 +43,20 @@ run('allocateLineResources returns spans/markers/blocks for a horizontal line', 
   assertEqual(result.blocks.every((block) => block.locked), true, 'blocks locked');
   assertEqual(result.blocks.every((block) => block.sourceLineId === baseLine.id), true, 'block source id');
   assertEqual(result.summary.includes('1800'), true, 'summary mentions 1800');
+  const firstBlock = result.blocks[0] as unknown as Record<string, unknown>;
+  assertEqual(firstBlock.width, 600, 'default block width propagated');
+});
+
+run('allocateLineResources propagates custom line block width to generated blocks', () => {
+  const narrowLine: ScaffoldLine = { ...baseLine, id: 'line-narrow', blockWidth: 355 };
+  const result = allocateLineResources(narrowLine);
+  if (!result.success) {
+    throw new Error('expected allocation success');
+  }
+  const blockWidths = result.blocks.map(
+    (block) => (block as unknown as Record<string, unknown>).width,
+  );
+  assertEqual(blockWidths.every((width) => width === 355), true, 'all blocks use line block width');
 });
 
 run('allocateLineResources rejects lines shorter than 150mm', () => {

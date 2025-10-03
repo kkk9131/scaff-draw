@@ -1,6 +1,7 @@
 import { FC } from 'react';
-import type { LineAppearance, LineColor, LineStyle, UIMode } from '../types';
+import type { BlockWidth, LineAppearance, LineColor, LineStyle, UIMode } from '../types';
 import { DEFAULT_SNAP_SIZE, SECONDARY_SNAP_SIZE } from '../utils/snap';
+import { SUPPORTED_BLOCK_WIDTHS } from '../utils/lineWidth.js';
 
 type Tool = {
   id: UIMode | 'allocate' | 'stair' | 'beam';
@@ -41,6 +42,8 @@ interface ToolPaletteProps {
   onAppearanceChange: (appearance: LineAppearance) => void;
   canAllocate: boolean;
   allocateHint?: string;
+  selectedBlockWidth: BlockWidth;
+  onBlockWidthChange: (width: BlockWidth) => void;
 }
 
 const ToolPalette: FC<ToolPaletteProps> = ({
@@ -56,6 +59,8 @@ const ToolPalette: FC<ToolPaletteProps> = ({
   onAppearanceChange,
   canAllocate,
   allocateHint,
+  selectedBlockWidth,
+  onBlockWidthChange,
 }) => {
   const handleClick = (tool: Tool) => {
     switch (tool.id) {
@@ -154,6 +159,24 @@ const ToolPalette: FC<ToolPaletteProps> = ({
                 }
               >
                 {option.label}
+              </button>
+            );
+          })}
+        </div>
+        <span className="draw-style__label">新規ラインのデッキ幅</span>
+        <div className="line-length-popup__width-options">
+          {SUPPORTED_BLOCK_WIDTHS.map((width) => {
+            const isActive = width === selectedBlockWidth;
+            const className = isActive ? 'width-chip width-chip--active' : 'width-chip';
+            return (
+              <button
+                key={width}
+                type="button"
+                className={className}
+                onClick={() => onBlockWidthChange(width)}
+                aria-pressed={isActive}
+              >
+                {width}mm
               </button>
             );
           })}

@@ -32,6 +32,11 @@ run('normalizeScaffoldLine applies color/style defaults', () => {
   const normalized = normalizeScaffoldLine(legacy);
   assertEqual(normalized.color, 'black', 'default color applied');
   assertEqual(normalized.style, 'solid', 'default style applied');
+  assertEqual(
+    (normalized as unknown as Record<string, unknown>).blockWidth,
+    600,
+    'default block width applied',
+  );
 });
 
 for (const line of results) {

@@ -49,8 +49,9 @@ export function recalculateLineWithLength(line: ScaffoldLine, nextLengthMm: numb
   if (orientation === 'horizontal') {
     const proposedStartX = midpointX - half;
     const proposedEndX = midpointX + half;
-    const nextStartX = proposedStartX;
-    const nextEndX = proposedEndX;
+    const direction = Math.sign(line.endX - line.startX) || 1;
+    const nextStartX = direction >= 0 ? proposedStartX : proposedEndX;
+    const nextEndX = direction >= 0 ? proposedEndX : proposedStartX;
     const nextY = snapToGrid(midpointY, snapSize);
 
     ensureNonZeroDelta(nextStartX, nextEndX, 'Snapped endpoints collapse the line.');
@@ -70,8 +71,9 @@ export function recalculateLineWithLength(line: ScaffoldLine, nextLengthMm: numb
   if (orientation === 'vertical') {
     const proposedStartY = midpointY - half;
     const proposedEndY = midpointY + half;
-    const nextStartY = proposedStartY;
-    const nextEndY = proposedEndY;
+    const direction = Math.sign(line.endY - line.startY) || 1;
+    const nextStartY = direction >= 0 ? proposedStartY : proposedEndY;
+    const nextEndY = direction >= 0 ? proposedEndY : proposedStartY;
     const nextX = snapToGrid(midpointX, snapSize);
 
     ensureNonZeroDelta(nextStartY, nextEndY, 'Snapped endpoints collapse the line.');
